@@ -1,0 +1,57 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: prepare-cp4d-configmap
+spec:
+  params:
+    - name: override_url
+      type: string
+      description: The url of the override_url yaml to apply for yq
+  workspaces:
+    - name: shared-workspace
+  results:
+    - name: output-file
+      description: the final file created by this fetch and override
+  steps:
+    - name: clone-repo
+      image: alpine/git
+      workingDir: $(workspaces.shared-workspace.path)
+      script: |
+        wget https://raw.githubusercontent.com/itz-public/k8s-manifests/refs/heads/main/cloud-pak-deployer/cp4d/cp4d.yaml -P $(workspaces.shared-workspace.path)/cp4d.yaml
+        wget $(params.override_url) -O $(workspaces.shared-workspace.path)/overrides.yaml
+    - name: apply-overrides
+      image: mikefarah/yq:4.45.4
+      workingDir: $(workspaces.shared-workspace.path)
+      securityContext:
+        runAsUser: 0
+      script: |
+        #!/bin/sh
+        export BASE=$(workspaces.shared-workspace.path)/cp4d.yaml
+        export OVERRIDE=$(workspaces.shared-workspace.path)/overrides.yaml
+
+        yq ea '
+          select(fileIndex == 0) as $base |
+          select(fileIndex == 1) as $over |
+
+          # Merge global_config
+          $base.global_config *= ($over.global_config) |
+
+          # Merge openshift[0]
+          $base.openshift[0] *= ($over.openshift[0]) |
+
+          # Merge cp4d[0] without overwriting cartridges
+          $base.cp4d[0] *= ($over.cp4d[0] | with_entries(select(.key != "cartridges"))) |
+
+          # Merge cartridges array by name
+          $base.cp4d[0].cartridges = (
+            $base.cp4d[0].cartridges
+            | map(
+                . as $b |
+                ($over.cp4d[0].cartridges // [] | map(select(.name == $b.name)) | .[0]) // {} * $b
+              )
+          ) |
+
+          $base
+        ' "$BASE" "$OVERRIDE" > $(workspaces.shared-workspace.path)/cp4d.yaml
+        echo "Final merged YAML written to: $(workspaces.shared-workspace.path)/cp4d.yaml"
+        echo "$(workspaces.shared-workspace.path)/cp4d.yaml" > $(results.output-file.path)

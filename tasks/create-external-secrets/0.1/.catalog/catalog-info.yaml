@@ -3,9 +3,9 @@ kind: Component
 metadata:
   name: create-external-secrets-v0.1
   annotations:
-    github.com/project-slug: cloud-native-toolkit/deployer-tekton-tasks
+    github.com/project-slug: itz-public/deployer-tekton-tasks
   labels:
-    techzone.ibm.com/version: '0.1'
+    techzone.ibm.com/version: "0.1"
   description: >-
     `create-external-secret` creates an ExternalSecrets in a provided NAMESPACE given a KEY_ID. This task assumes that a ClusterSecretStore is already created.
   title: Create an external secret

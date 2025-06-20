@@ -1,0 +1,40 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: create-pvc
+spec:
+  params:
+    - name: pvc
+      type: string
+      description: The name of the pvc to create
+    - name: namespace
+      type: string
+      description: the name of the namespace the pvc will reside in
+    - name: sc
+      type: string
+      description: the storage class to use for the pvc
+    - name: accessmode
+      type: string
+      description: the access mode (RWO) or (RWX) to use
+    - name: size
+      type: string
+      description: the size of the pvc to create
+  steps:
+    - name: apply-kubernetes-manifest
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        oc apply -f - <<EOF
+        apiVersion: v1 
+        kind: PersistentVolumeClaim
+        metadata:
+          name: $(params.pvc)
+          namespace: $(params.namespace)
+        spec:
+          accessModes:
+          - $(params.accessmode)
+          storageClassName: $(params.sc)
+          resources:
+            requests:
+              storage: $(params.size)
+        EOF

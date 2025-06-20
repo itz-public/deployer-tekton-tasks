@@ -1,0 +1,107 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: run-cloud-pak-deployer
+spec:
+  params:
+    - name: configmap
+      type: string
+      description: The name of the configmap to use that supplies cloud pak metadata
+    - name: namespace
+      type: string
+      description: the name of the namespace the deployer will reside in
+    - name: cloud-pak-deployer-version
+      type: string
+      description: The container version of the cloud pak deployer to use
+    - name: status-pvc
+      type: string
+      description: the pvc to mount status updates to
+    - name: deployer-sa
+      type: string
+      description: The name of the service account to use
+  steps:
+    - name: apply-kubernetes-manifest
+      image: quay.io/congxdev/ibm-pak-ubi:latest
+      script: |
+        oc delete job cloud-pak-deployer -n $(params.namespace) --ignore-not-found
+
+        sleep 20
+
+        oc apply -f - <<EOF
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          labels:
+            app: cloud-pak-deployer
+          name: cloud-pak-deployer
+          namespace: $(params.namespace)
+        spec:
+          parallelism: 1
+          completions: 1
+          backoffLimit: 0
+          template:
+            metadata:
+              name: cloud-pak-deployer
+              labels:
+                app: cloud-pak-deployer
+            spec:
+              containers:
+              - name: cloud-pak-deployer
+                image: quay.io/cloud-pak-deployer/cloud-pak-deployer:$(params.cloud-pak-deployer-version)
+                imagePullPolicy: Always
+                terminationMessagePath: /dev/termination-log
+                terminationMessagePolicy: File
+                env:
+                - name: CONFIG_DIR
+                  value: /Data/cpd-config
+                - name: STATUS_DIR
+                  value: /Data/cpd-status
+                - name: CP_ENTITLEMENT_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      key: cp-entitlement-key
+                      name: cloud-pak-entitlement-key
+                volumeMounts:
+                - name: config-volume
+                  mountPath: /Data/cpd-config/config
+                - name: status-volume
+                  mountPath: /Data/cpd-status
+                command: ["/bin/sh","-xc"]
+                args: 
+                  - /cloud-pak-deployer/cp-deploy.sh env apply -v
+              restartPolicy: Never
+              securityContext:
+                runAsUser: 0
+              serviceAccountName: $(params.deployer-sa)
+              volumes:
+              - name: config-volume
+                configMap:
+                  name: $(params.configmap)
+              - name: status-volume
+                persistentVolumeClaim:
+                  claimName: $(params.status-pvc)
+        EOF
+
+        sleep 20
+
+        while true
+        do
+          is_complete=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Complete") | contains({"status": "'True'"})')
+          if [[ $is_complete != "true" ]]; then
+            echo "Waiting for job to be Complete. See cloud-pak-deployer pod's logs in project cloud-pak-deployer for more details."
+          else
+            echo "Cloud Pak Deployer job is Complete."
+            break
+          fi
+
+          did_fail=$(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | contains({"status": "'True'"})')
+          if [[ $did_fail == "true" ]]; then
+            echo "Cloud Pak Deployer job failed."
+            echo $(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | .reason')
+            echo $(oc get -n $(params.namespace) job/cloud-pak-deployer -o yaml | yq '.status.conditions.[] | select(.type == "Failed") | .message')
+            exit 68
+          fi
+          
+          sleep 10
+        done

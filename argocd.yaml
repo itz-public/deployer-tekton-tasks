@@ -11,8 +11,8 @@ spec:
   source:
     directory:
       recurse: true
-      exclude: '{**/*/catalog-info.yaml,**/*/tests/**}'
-    repoURL: https://github.com/cloud-native-toolkit/deployer-tekton-tasks.git
+      exclude: "{**/*/catalog-info.yaml,**/*/tests/**}"
+    repoURL: https://github.com/itz-public/deployer-tekton-tasks.git
     targetRevision: main
     path: tasks
   syncPolicy:
@@ -20,4 +20,4 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-    - CreateNamespace=true
+      - CreateNamespace=true

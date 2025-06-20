@@ -1,13 +1,13 @@
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: kustomize-cli-v0.1
+  name: create-ibm-entitlement-secret
   annotations:
     github.com/project-slug: itz-public/deployer-tekton-tasks
   labels:
-    techzone.ibm.com/version: "0.1"
-  description: Tekton task containing Kustomize, jq, yq, kubectl, httpie, curl, etc.
-  title: Kustomize CLI
+    techzone.ibm.com/version: "0.2"
+  description: This task creates an ibm entitlement secret for cloud pak deployer
+  title: Create ibm entitlement secret for cloud pak deployer
   namespace: ibm-technology-zone
 spec:
   type: tekton-task

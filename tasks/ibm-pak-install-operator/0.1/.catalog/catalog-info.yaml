@@ -3,9 +3,9 @@ kind: Component
 metadata:
   name: ibm-pak-install-operator-v0.1
   annotations:
-    github.com/project-slug: cloud-native-toolkit/deployer-tekton-tasks
+    github.com/project-slug: itz-public/deployer-tekton-tasks
   labels:
-    techzone.ibm.com/version: '0.1'
+    techzone.ibm.com/version: "0.1"
   description: This task applies a CASE's catalog source and subscription using its CASE name and version
   title: ibm-pak install operator
   namespace: ibm-technology-zone

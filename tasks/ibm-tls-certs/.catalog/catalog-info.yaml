@@ -3,9 +3,9 @@ kind: Component
 metadata:
   name: ibm-tls-certs
   annotations:
-    github.com/project-slug: cloud-native-toolkit/deployer-tekton-tasks
+    github.com/project-slug: itz-public/deployer-tekton-tasks
   labels:
-    techzone.ibm.com/version: '0.1'
+    techzone.ibm.com/version: "0.1"
   description: Installs the tls certs from common services to the cp console
   title: IBM Cloud Pak cert install
   namespace: ibm-technology-zone

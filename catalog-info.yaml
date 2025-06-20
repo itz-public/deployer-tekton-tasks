@@ -3,7 +3,7 @@ kind: Component
 metadata:
   name: deployer-tekton-tasks
   annotations:
-    github.com/project-slug: cloud-native-toolkit/deployer-tekton-tasks
+    github.com/project-slug: itz-public/deployer-tekton-tasks
   description: This is a library of Tekton tasks that are used in IBM TechZone deployer to accelerate the writing of Tekton pipelines.
   title: Deployer Tekton tasks
   namespace: ibm-technology-zone

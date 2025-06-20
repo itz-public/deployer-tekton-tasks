@@ -1,0 +1,51 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: create-configmap
+spec:
+  params:
+    - name: configmap
+      type: string
+      description: The name of the configmap to create
+    - name: namespace
+      type: string
+      description: The namespace the configmap will reside in
+    - name: data
+      type: string
+      description: The data to use for the configmap if shared workspace and result are not supplied
+      default: ""
+    - name: result-path
+      type: string
+      description: Optional path to a file produced by a previous task result
+      default: ""
+  workspaces:
+    - name: shared-workspace
+      optional: true
+  steps:
+    - name: apply-kubernetes-manifest
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        #!/bin/sh
+        set -e
+
+        # Clean up the result-path safely
+        RAW_PATH="$(params.result-path)"
+        FILE_PATH=$(echo "$RAW_PATH" | tr -d '\r\n')
+        echo "Normalized file path: '$FILE_PATH'"
+
+        # Determine which input source to use
+        if [ -n "$FILE_PATH" ] && [ -f "$FILE_PATH" ]; then
+          echo "Using result file: $FILE_PATH"
+          DATA_FILE="$FILE_PATH"
+        else
+          echo "No result file or workspace file found, using inline data"
+          TMP_DATA_FILE="/tmp/inline-data.yaml"
+          echo "$(params.data)" > "$TMP_DATA_FILE"
+          DATA_FILE="$TMP_DATA_FILE"
+        fi
+
+        TMP_FILE="/tmp/generated-configmap.yaml"
+        FILE_NAME=$(basename "$FILE_PATH")
+        echo "Creating ConfigMap with data from: $DATA_FILE"
+
+        oc create configmap $(params.configmap) -n $(params.namespace) --from-file=$FILE_NAME=$DATA_FILE --dry-run=client -o yaml | oc apply -f -

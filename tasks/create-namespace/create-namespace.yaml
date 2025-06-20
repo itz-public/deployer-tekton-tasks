@@ -1,0 +1,20 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: create-namespace
+spec:
+  params:
+    - name: namespace
+      type: string
+      description: The name of the namespace to create
+  steps:
+    - name: apply-kubernetes-manifest
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        oc apply -f - <<EOF 
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: $(params.namespace)
+        EOF

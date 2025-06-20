@@ -1,0 +1,35 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: create-scc-rolebinding
+spec:
+  params:
+    - name: scc
+      type: string
+      description: The existing scc to add to the service account
+    - name: sa
+      type: string
+      description: The name of the Service Account to create
+    - name: namespace
+      type: string
+      description: The name of the namespace the service account is in
+  steps:
+    - name: apply-kubernetes-manifest
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        oc apply -f - <<EOF 
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: system:openshift:scc:$(params.scc)
+          namespace: $(params.namespace)
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: system:openshift:scc:$(params.scc)
+        subjects:
+        - kind: ServiceAccount
+          name: $(params.sa)
+          namespace: $(params.namespace)
+        EOF
