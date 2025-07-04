@@ -17,8 +17,8 @@ spec:
       image: alpine/git
       workingDir: $(workspaces.shared-workspace.path)
       script: |
-        wget https://raw.githubusercontent.com/itz-public/k8s-manifests/refs/heads/main/cloud-pak-deployer/cp4d/cp4d.yaml -P $(workspaces.shared-workspace.path)/cp4d.yaml
-        wget $(params.override_url) -O $(workspaces.shared-workspace.path)/overrides.yaml
+        wget -O $(workspaces.shared-workspace.path)/base.yaml https://raw.githubusercontent.com/itz-public/k8s-manifests/refs/heads/main/cloud-pak-deployer/cp4d/cp4d.yaml
+        wget -O $(workspaces.shared-workspace.path)/overrides.yaml $(params.override_url)
     - name: apply-overrides
       image: mikefarah/yq:4.45.4
       workingDir: $(workspaces.shared-workspace.path)
@@ -26,7 +26,7 @@ spec:
         runAsUser: 0
       script: |
         #!/bin/sh
-        export BASE=$(workspaces.shared-workspace.path)/cp4d.yaml
+        export BASE=$(workspaces.shared-workspace.path)/base.yaml
         export OVERRIDE=$(workspaces.shared-workspace.path)/overrides.yaml
 
         yq ea '
