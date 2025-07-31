@@ -4,6 +4,9 @@ metadata:
   name: prepare-cp4d-configmap
 spec:
   params:
+    - name: cp4d-version
+      type: string
+      description: The version of CP4D to deploy to Openshift
     - name: override_url
       type: string
       description: The url of the override_url yaml to apply for yq
@@ -17,7 +20,7 @@ spec:
       image: alpine/git
       workingDir: $(workspaces.shared-workspace.path)
       script: |
-        wget -O $(workspaces.shared-workspace.path)/base.yaml https://raw.githubusercontent.com/itz-public/k8s-manifests/refs/heads/main/cloud-pak-deployer/cp4d/cp4d.yaml
+        wget -O $(workspaces.shared-workspace.path)/base.yaml https://raw.githubusercontent.com/itz-public/k8s-manifests/refs/heads/main/cloud-pak-deployer/cp4d/$(params.cp4d-version)/cp4d.yaml
         wget -O $(workspaces.shared-workspace.path)/overrides.yaml $(params.override_url)
     - name: apply-overrides
       image: mikefarah/yq:4.45.4
