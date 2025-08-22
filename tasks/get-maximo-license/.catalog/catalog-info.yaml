@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: run-cloud-pak-deployer
+  annotations:
+    github.com/project-slug: itz-public/deployer-tekton-tasks
+  labels:
+    techzone.ibm.com/version: "0.2"
+  description: this task gets the maximo license required for install
+  title: Get Maximo License
+  namespace: ibm-technology-zone
+spec:
+  type: tekton-task
+  lifecycle: experimental
+  owner: ibm/ibm-technology-zone
+  subcomponentOf: ibm-technology-zone/deployer-tekton-tasks
