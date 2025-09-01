@@ -14,7 +14,7 @@ spec:
       default: https://afa20521-cd75-4864-843f-e59fd0ffd49d.us-south.secrets-manager.appdomain.cloud
     - name: LICENSE_FILE_SECRET_NAME
       type: string
-      default: false
+      default: "false"
   steps:
     - name: write-maximo-license
       image: quay.io/openshift/origin-cli:4.16
