@@ -6,12 +6,18 @@ spec:
   workspaces:
     - name: ws
   params:
+    - name: cli-image-version
+      type: string
+      default: latest
     - name: mas-catalog-version
       type: string
       default: "v9-250731-amd64"
     - name: mas-channel
       type: string
       default: "9.1.x"
+    - name: mas-app-cfg-retries
+      type: string
+      default: ""
 
     - name: mas-instance-id
       type: string
@@ -189,7 +195,8 @@ spec:
 
   steps:
     - name: install
-      image: quay.io/ibmmas/cli:latest
+      image: quay.io/ibmmas/cli:$(params.cli-image-version)
+      imagePullPolicy: Always
       script: |
         #!/bin/bash
 
@@ -213,6 +220,11 @@ spec:
         CMD+=" --storage-accessmode \"$(params.storage-accessmode)\""
         CMD+=" --dro-namespace $(params.dro-namespace)"
         CMD+=" --mongodb-namespace $(params.mongodb-namespace)"
+
+        MAS_APP_CFG_RETRIES="$(params.mas-app-cfg-retries)"
+        if [[ "$MAS_APP_CFG_RETRIES" != "" ]]; then
+          CMD+=" --mas-app-cfg-retries $MAS_APP_CFG_RETRIES"
+        fi
 
         # Dep: Db2, Kafka
         MAS_APP_CHANNEL_IOT="$(params.iot-channel)"
