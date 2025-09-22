@@ -193,8 +193,49 @@ spec:
       type: string
       default: "true"
 
+    #### AI SERVICE ####
+    - name: aiservice-instance-id
+      type: string
+      default: "mas1"
+    - name: aiservice-channel
+      type: string
+      default: ""
+    - name: minio-password
+      type: string
+      default: ""
+    - name: minio-user
+      type: string
+      default: ""
+    - name: watsonxai-apikey
+      type: string
+      default: ""
+    - name: watsonxai-url
+      type: string
+      default: ""
+    - name: watsonxai-project-id
+      type: string
+      default: ""
+    - name: tenant-entitlement-type
+      type: string
+      default: "standard"
+    - name: tenant-entitlement-start-date
+      type: string
+      default: "2025-01-01"
+    - name: tenant-entitlement-end-date
+      type: string
+      default: "2026-01-01"
+    - name: rsl-url
+      type: string
+      default: ""
+    - name: rsl-org-id
+      type: string
+      default: ""
+    - name: rsl-token
+      type: string
+      default: ""
+
   steps:
-    - name: install
+    - name: install-mas
       image: quay.io/ibmmas/cli:$(params.cli-image-version)
       imagePullPolicy: Always
       script: |
@@ -285,7 +326,7 @@ spec:
           CMD+=" --manage-channel $MAS_APP_CHANNEL_MANAGE"
           CMD+=" --db2-manage"
           CMD+=" --manage-jdbc $(params.manage-jdbc)"
-          CMD+=" --manage-components $(params.manage-components)"
+          CMD+=" --manage-components '$(params.manage-components)'"
 
           ENABLE_DEMO_DATA="$(params.enable-manage-demo-data)"
           if [[ "$ENABLE_DEMO_DATA" == "true" ]]; then
@@ -348,3 +389,72 @@ spec:
         echo "$CMD"
 
         eval "$CMD"
+    - name: install-ai-service
+      image: quay.io/ibmmas/cli:$(params.cli-image-version)
+      imagePullPolicy: Always
+      script: |
+        #!/bin/bash
+        # Verify empty vars
+
+        [[ "$(params.minio-user)" == "" ]] && echo "Missing minio user" && exit 1
+        [[ "$(params.minio-password)" == "" ]] && echo "Missing minio password" && exit 1
+        [[ "$(params.watsonxai-apikey)" == "" ]] && echo "Missing watsonX apikey" && exit 1
+        [[ "$(params.watsonxai-url)" == "" ]] && echo "Missing watsonX url" && exit 1
+        [[ "$(params.watsonxai-project-id)" == "" ]] && echo "Missing watsonX project id" && exit 1
+        [[ "$(params.tenant-entitlement-type)" == "" ]] && echo "Missing entitlement type" && exit 1
+        [[ "$(params.tenant-entitlement-start-date)" == "" ]] && echo "Missing entitlement start date" && exit 1
+        [[ "$(params.tenant-entitlement-end-date)" == "" ]] && echo "Missing entitlement end date" && exit 1
+
+
+        AISERVICE_CHANNEL=$(params.aiservice-channel)
+        if [[ AISERVICE_CHANNEL != "" ]]; then
+          CMD="mas aiservice-install"
+          CMD+=" --mas-catalog-version $(params.mas-catalog-version)"
+          CMD+=" --aiservice-instance-id $(params.aiservice-instance-id)"
+          CMD+=" --ibm-entitlement-key $(params.ibm-entitlement-key)"
+          CMD+=" --license-file \"$(params.license-file)\""
+          CMD+=" --uds-email \"$(params.uds-email)\""
+          CMD+=" --uds-firstname \"$(params.uds-firstname)\""
+          CMD+=" --uds-lastname \"$(params.uds-lastname)\""
+          CMD+=" --storage-class-rwo \"$(params.storage-rwo)\""
+          CMD+=" --storage-class-rwx \"$(params.storage-rwx)\""
+          CMD+=" --storage-pipeline \"$(params.storage-pipeline)\""
+          CMD+=" --storage-accessmode \"$(params.storage-accessmode)\""
+          CMD+=" --dro-namespace $(params.dro-namespace)"
+          CMD+=" --mongodb-namespace $(params.mongodb-namespace)"
+          CMD+=" --aiservice-channel $(params.aiservice-channel)"         
+          CMD+=" --install-minio"
+          CMD+=" --minio-root-user $(params.minio-user)"
+          CMD+=" --minio-root-password $(params.minio-password)"
+          CMD+=" --watsonxai-apikey $(params.watsonxai-apikey)"
+          CMD+=" --watsonxai-url $(params.watsonxai-url)"
+          CMD+=" --watsonxai-project-id $(params.watsonxai-project-id)"
+          CMD+=" --tenant-entitlement-type $(params.tenant-entitlement-type)"
+          CMD+=" --tenant-entitlement-start-date $(params.tenant-entitlement-start-date)"
+          CMD+=" --tenant-entitlement-end-date $(params.tenant-entitlement-end-date)"
+
+          USE_MANUAL_CERTS=$(params.use-letsencrypt-certs)
+          if [[ "$USE_MANUAL_CERTS" == "true" ]]; then
+            CMD+=" --manual-certificates $(workspaces.ws.path)/masconfig/certs"
+          fi
+          
+          # Optional for AI Service
+          RSL_URL=$(params.rsl-url)
+          if [[ $RSL_URL != "" ]]; then
+            CMD+=" --rsl-url $(params.rsl-url)"
+          fi
+          RSL_ORG_ID=$(params.rsl-org-id)
+          if [[ $RSL_ORG_ID != "" ]]; then
+            CMD+=" --rsl-org-id $(params.rsl-org-id)"
+          fi
+          RSL_TOKEN=$(params.rsl-token)
+          if [[ $RSL_TOKEN != "" ]]; then
+            CMD+=" --rsl-token 'Bearer $(params.rsl-token)'"
+          fi 
+          
+          CMD+=" --accept-license --image-pull-policy Always --skip-pre-check --no-confirm;"
+
+          echo "$CMD"
+
+          eval "$CMD"
+        fi
