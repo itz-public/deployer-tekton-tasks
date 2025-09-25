@@ -394,20 +394,20 @@ spec:
       imagePullPolicy: Always
       script: |
         #!/bin/bash
-        # Verify empty vars
-
-        [[ "$(params.minio-user)" == "" ]] && echo "Missing minio user" && exit 1
-        [[ "$(params.minio-password)" == "" ]] && echo "Missing minio password" && exit 1
-        [[ "$(params.watsonxai-apikey)" == "" ]] && echo "Missing watsonX apikey" && exit 1
-        [[ "$(params.watsonxai-url)" == "" ]] && echo "Missing watsonX url" && exit 1
-        [[ "$(params.watsonxai-project-id)" == "" ]] && echo "Missing watsonX project id" && exit 1
-        [[ "$(params.tenant-entitlement-type)" == "" ]] && echo "Missing entitlement type" && exit 1
-        [[ "$(params.tenant-entitlement-start-date)" == "" ]] && echo "Missing entitlement start date" && exit 1
-        [[ "$(params.tenant-entitlement-end-date)" == "" ]] && echo "Missing entitlement end date" && exit 1
-
-
+        
         AISERVICE_CHANNEL=$(params.aiservice-channel)
         if [[ AISERVICE_CHANNEL != "" ]]; then
+          # Verify empty vars
+          
+          [[ "$(params.minio-user)" == "" ]] && echo "Missing minio user" && exit 1
+          [[ "$(params.minio-password)" == "" ]] && echo "Missing minio password" && exit 1
+          [[ "$(params.watsonxai-apikey)" == "" ]] && echo "Missing watsonX apikey" && exit 1
+          [[ "$(params.watsonxai-url)" == "" ]] && echo "Missing watsonX url" && exit 1
+          [[ "$(params.watsonxai-project-id)" == "" ]] && echo "Missing watsonX project id" && exit 1
+          [[ "$(params.tenant-entitlement-type)" == "" ]] && echo "Missing entitlement type" && exit 1
+          [[ "$(params.tenant-entitlement-start-date)" == "" ]] && echo "Missing entitlement start date" && exit 1
+          [[ "$(params.tenant-entitlement-end-date)" == "" ]] && echo "Missing entitlement end date" && exit 1
+          
           CMD="mas aiservice-install"
           CMD+=" --mas-catalog-version $(params.mas-catalog-version)"
           CMD+=" --aiservice-instance-id $(params.aiservice-instance-id)"
