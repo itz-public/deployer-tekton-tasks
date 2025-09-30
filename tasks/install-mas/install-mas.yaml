@@ -396,7 +396,7 @@ spec:
         #!/bin/bash
         
         AISERVICE_CHANNEL=$(params.aiservice-channel)
-        if [[ AISERVICE_CHANNEL != "" ]]; then
+        if [[ $AISERVICE_CHANNEL != "" ]]; then
           # Verify empty vars
           
           [[ "$(params.minio-user)" == "" ]] && echo "Missing minio user" && exit 1
