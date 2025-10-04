@@ -262,11 +262,6 @@ spec:
         CMD+=" --dro-namespace $(params.dro-namespace)"
         CMD+=" --mongodb-namespace $(params.mongodb-namespace)"
 
-        MAS_APP_CFG_RETRIES="$(params.mas-app-cfg-retries)"
-        if [[ "$MAS_APP_CFG_RETRIES" != "" ]]; then
-          CMD+=" --mas-app-cfg-retries $MAS_APP_CFG_RETRIES"
-        fi
-
         # Dep: Db2, Kafka
         MAS_APP_CHANNEL_IOT="$(params.iot-channel)"
         if [[ "$MAS_APP_CHANNEL_IOT" != "" ]]; then
