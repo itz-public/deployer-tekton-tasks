@@ -53,6 +53,8 @@ spec:
                 terminationMessagePath: /dev/termination-log
                 terminationMessagePolicy: File
                 env:
+                - name: CASE_TOLERATION
+                  value: --skip-verify
                 - name: CONFIG_DIR
                   value: /Data/cpd-config
                 - name: STATUS_DIR
