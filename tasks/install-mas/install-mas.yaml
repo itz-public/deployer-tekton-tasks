@@ -261,7 +261,6 @@ spec:
         CMD+=" --storage-accessmode \"$(params.storage-accessmode)\""
         CMD+=" --dro-namespace $(params.dro-namespace)"
         CMD+=" --mongodb-namespace $(params.mongodb-namespace)"
-        CMD+=" --additional-configs $(workspaces.ws.path)/masconfig"
 
         MAS_APP_CFG_RETRIES="$(params.mas-app-cfg-retries)"
         if [[ "$MAS_APP_CFG_RETRIES" != "" ]]; then
@@ -306,6 +305,7 @@ spec:
         # Dep: Db2
         MAS_APP_CHANNEL_MREF="$(params.facilities-channel)"
         if [[ "$MAS_APP_CHANNEL_MREF" != "" ]]; then
+          CMD+=" --additional-configs $(workspaces.ws.path)/masconfig"
           CMD+=" --facilities-channel $MAS_APP_CHANNEL_MREF --facilities-size $(params.facilities-size)"
           CMD+=" --db2-facilities"
         fi
@@ -433,7 +433,6 @@ spec:
           CMD+=" --tenant-entitlement-type $(params.tenant-entitlement-type)"
           CMD+=" --tenant-entitlement-start-date $(params.tenant-entitlement-start-date)"
           CMD+=" --tenant-entitlement-end-date $(params.tenant-entitlement-end-date)"
-          CMD+=" --additional-configs $(workspaces.ws.path)/masconfig"
 
           USE_MANUAL_CERTS=$(params.use-letsencrypt-certs)
           if [[ "$USE_MANUAL_CERTS" == "true" ]]; then
