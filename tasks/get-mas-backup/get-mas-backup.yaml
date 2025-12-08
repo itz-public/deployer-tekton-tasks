@@ -1,0 +1,216 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: get-mas-backup
+spec:
+  workspaces:
+    - name: backups
+      description: Workspace to store downloaded backup files
+  params:
+    - name: application
+      type: string
+      description: Application name (e.g., mref, core)
+    - name: resource-id
+      type: string
+      description: IBM Cloud Object Storage resource instance ID (CRN)
+      default: ""
+    - name: endpoint
+      type: string
+      description: S3 endpoint URL
+      default: "https://s3.us.cloud-object-storage.appdomain.cloud"
+    - name: object-prefix
+      type: string
+      description: Optional prefix to filter objects
+      default: ""
+  steps:
+    - name: download-backups
+      image: quay.io/openshift/origin-cli:4.16
+      workingDir: $(workspaces.backups.path)
+      script: |
+        #!/usr/bin/env bash
+        
+        ################################################################################
+        # IBM Cloud Object Storage Backup Download
+        ################################################################################
+        
+        set -e
+        
+        # Configuration from parameters
+        APP="$(params.application)"
+        RESOURCE_ID="$(params.resource-id)"
+        ENDPOINT="$(params.endpoint)"
+        OBJECT_PREFIX="$(params.object-prefix)"
+        DOWNLOAD_DIR="$(workspaces.backups.path)"
+        APP_BUCKET_NAME="techzone-${APP}"
+        ACCESS_TOKEN=""
+        
+        # Logging functions
+        log() {
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+        }
+        
+        error() {
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >&2
+            exit 1
+        }
+        
+        # Validate configuration
+        validate_env() {
+            log "Validating configuration..."
+            
+            [[ -z "$APP" ]] && error "Application name is not set"
+            [[ -z "$RESOURCE_ID" ]] && error "RESOURCE_ID is not set"
+            [[ -z "$ENDPOINT" ]] && error "ENDPOINT is not set"
+            
+            log "Configuration validated"
+            log "Application: $APP"
+            log "Bucket: $APP_BUCKET_NAME"
+            log "Download directory: $DOWNLOAD_DIR"
+        }
+        
+        # Authenticate to IBM Cloud
+        authenticate() {
+            log "Authenticating to IBM Cloud..."
+            
+            # Retrieve IBM Cloud API Key from cluster secret
+            local IBMCLOUD_API_KEY
+            IBMCLOUD_API_KEY=$(oc get secret ibm-secret -n kube-system -o jsonpath='{.data.apiKey}' | base64 -d)
+            
+            [[ -z "$IBMCLOUD_API_KEY" ]] && error "Failed to retrieve IBM Cloud API key from secret"
+            
+            local auth_response
+            auth_response=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" \
+                -H 'Accept: application/json' \
+                -H 'Content-Type: application/x-www-form-urlencoded' \
+                --data-urlencode "apikey=${IBMCLOUD_API_KEY}" \
+                --data-urlencode "response_type=cloud_iam" \
+                --data-urlencode "grant_type=urn:ibm:params:oauth:grant-type:apikey")
+            
+            ACCESS_TOKEN=$(echo "$auth_response" | grep -o '"access_token":"[^"]*' | grep -o '[^"]*$')
+            
+            [[ -z "$ACCESS_TOKEN" ]] && error "Failed to get access token"
+            
+            log "Authentication successful"
+        }
+        
+        # Verify bucket exists
+        verify_bucket() {
+            log "Verifying bucket: $APP_BUCKET_NAME"
+            
+            local response
+            response=$(curl -s "$ENDPOINT/" \
+                -H "Authorization: bearer ${ACCESS_TOKEN}" \
+                -H "ibm-service-instance-id: ${RESOURCE_ID}")
+            
+            if ! echo "$response" | xmllint --xpath "//*[local-name()='Bucket']/*[local-name()='Name']/text()" - 2>/dev/null | grep -q "^${APP_BUCKET_NAME}$"; then
+                error "Bucket '$APP_BUCKET_NAME' not found"
+            fi
+            
+            log "Bucket verified"
+        }
+        
+        # List and download objects
+        download_objects() {
+            log "Listing objects in bucket: $APP_BUCKET_NAME"
+            
+            local marker=""
+            local is_truncated="true"
+            local total_count=0
+            
+            while [[ "$is_truncated" == "true" ]]; do
+                # Build URL with optional prefix and marker
+                local url="$ENDPOINT/$APP_BUCKET_NAME?max-keys=1000"
+                [[ -n "$OBJECT_PREFIX" ]] && url="${url}&prefix=${OBJECT_PREFIX}"
+                [[ -n "$marker" ]] && url="${url}&marker=${marker}"
+                
+                # Get object list
+                local response
+                response=$(curl -s "$url" -H "Authorization: bearer ${ACCESS_TOKEN}")
+                
+                # Check if more pages exist
+                is_truncated=$(echo "$response" | xmllint --xpath '//*[local-name()="IsTruncated"]/text()' - 2>/dev/null || echo "false")
+                
+                # Get next marker if truncated
+                if [[ "$is_truncated" == "true" ]]; then
+                    marker=$(echo "$response" | xmllint --xpath '//*[local-name()="NextMarker"]/text()' - 2>/dev/null)
+                fi
+                
+                # Parse and download objects
+                local object_count
+                object_count=$(echo "$response" | xmllint --xpath 'count(//*[local-name()="Contents"])' - 2>/dev/null)
+                
+                for ((i=1; i<=object_count; i++)); do
+                    local key size
+                    key=$(echo "$response" | xmllint --xpath "//*[local-name()='Contents'][$i]/*[local-name()='Key']/text()" - 2>/dev/null)
+                    size=$(echo "$response" | xmllint --xpath "//*[local-name()='Contents'][$i]/*[local-name()='Size']/text()" - 2>/dev/null)
+                    
+                    # Download object
+                    local filename=$(basename "$key")
+                    local filepath="$DOWNLOAD_DIR/$filename"
+                    
+                    # Skip if already exists with same size
+                    if [[ -f "$filepath" ]]; then
+                        local existing_size=$(stat -c%s "$filepath" 2>/dev/null)
+                        if [[ "$existing_size" == "$size" ]]; then
+                            log "Skipping (already exists): $filename"
+                            ((total_count++))
+                            continue
+                        fi
+                    fi
+                    
+                    log "Downloading: $filename ($size bytes)"
+                    
+                    # Download with retry
+                    local attempt=0
+                    local max_attempts=3
+                    local success=false
+                    
+                    while (( attempt < max_attempts )) && [[ "$success" != "true" ]]; do
+                        ((attempt++))
+                        
+                        if curl -s -f -o "$filepath" \
+                            "$ENDPOINT/$APP_BUCKET_NAME/$key" \
+                            -H "Authorization: bearer ${ACCESS_TOKEN}"; then
+                            
+                            # Verify size
+                            local downloaded_size=$(stat -c%s "$filepath" 2>/dev/null)
+                            if [[ "$downloaded_size" == "$size" ]]; then
+                                log "Downloaded: $filename"
+                                success=true
+                            else
+                                log "Size mismatch, retrying: $filename (attempt $attempt/$max_attempts)"
+                                rm -f "$filepath"
+                                sleep 2
+                            fi
+                        else
+                            log "Download failed, retrying: $filename (attempt $attempt/$max_attempts)"
+                            rm -f "$filepath"
+                            sleep 2
+                        fi
+                    done
+                    
+                    if [[ "$success" != "true" ]]; then
+                        log "WARNING: Failed to download after $max_attempts attempts: $filename"
+                    else
+                        ((total_count++))
+                    fi
+                done
+            done
+            
+            log "Download complete. Total objects downloaded: $total_count"
+        }
+        
+        # Main execution
+        main() {
+            log "IBM Cloud Object Storage Backup Download"
+            log "Starting download process..."
+            
+            validate_env
+            authenticate
+            verify_bucket
+            download_objects
+            
+            log "All done!"
+        }
+        
+        main
