@@ -1,0 +1,398 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: restore-facilities-app
+spec:
+  params:
+    - name: apikey
+      type: string
+      description: COS apikey
+      default: ""
+    - name: resource-id
+      type: string
+      description: IBM Cloud Object Storage resource instance ID (CRN)
+      default: ""
+    - name: endpoint
+      type: string
+      description: S3 endpoint URL
+      default: "https://s3.us.cloud-object-storage.appdomain.cloud"
+    - name: object-prefix
+      type: string
+      description: Optional prefix to filter objects
+      default: ""
+    - name: mas-instance-id
+      type: string
+      default: "mas1"
+    - name: mas-workspace-id
+      type: string
+      default: "ws1"
+    - name: mas-workspace-name
+      type: string
+      default: "workspace"
+    - name: db2-namespace
+      type: string
+      description: Namespace where DB2 is deployed
+      default: "db2u"
+    - name: download-dir
+      type: string
+      description: Download directory inside DB2 pod
+      default: "/mnt/backup"
+  steps:
+    - name: get-facilities-backup
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        #!/usr/bin/env bash
+        
+        ################################################################################
+        # IBM Cloud Object Storage Backup Download to DB2 Pod
+        ################################################################################
+        
+        set -e
+        
+        # Configuration from parameters
+        APP="facilities"
+        APP_BUCKET_NAME="techzone-mref"
+        RESOURCE_ID="$(params.resource-id)"
+        ENDPOINT="$(params.endpoint)"
+        OBJECT_PREFIX="$(params.object-prefix)"
+        DB2_NAMESPACE="$(params.db2-namespace)"
+        DB2_POD_NAME="c-mas-$(params.mas-instance-id)-$(params.mas-workspace-id)-$APP-db2u-0"
+        DOWNLOAD_DIR="$(params.download-dir)"
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] IBM Cloud Object Storage Backup Download to DB2 Pod"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting download process..."
+        
+        # Validate configuration
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Validating configuration..."
+        [[ -z "$APP" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Application name is not set" >&2; exit 1; }
+        [[ -z "$RESOURCE_ID" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: RESOURCE_ID is not set" >&2; exit 1; }
+        [[ -z "$ENDPOINT" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: ENDPOINT is not set" >&2; exit 1; }
+        [[ -z "$DB2_NAMESPACE" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 namespace is not set" >&2; exit 1; }
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Configuration validated"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Application: $APP"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket: $APP_BUCKET_NAME"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] DB2 Namespace: $DB2_NAMESPACE"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download directory: $DOWNLOAD_DIR"
+        
+        # Authenticate to IBM Cloud
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Authenticating to IBM Cloud..."
+        
+        IBMCLOUD_API_KEY="$(params.apikey)"
+        [[ -z "$IBMCLOUD_API_KEY" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to retrieve IBM Cloud API key from secret" >&2; exit 1; }
+        
+        auth_response=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "apikey=${IBMCLOUD_API_KEY}" \
+            --data-urlencode "response_type=cloud_iam" \
+            --data-urlencode "grant_type=urn:ibm:params:oauth:grant-type:apikey")
+        
+        ACCESS_TOKEN=$(echo "$auth_response" | grep -o '"access_token":"[^"]*' | grep -o '[^"]*$')
+        [[ -z "$ACCESS_TOKEN" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to get access token" >&2; exit 1; }
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Authentication successful"
+        
+        # Verify bucket exists
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying bucket: $APP_BUCKET_NAME"
+        
+        response=$(curl -s "$ENDPOINT/" \
+            -H "Authorization: bearer ${ACCESS_TOKEN}" \
+            -H "ibm-service-instance-id: ${RESOURCE_ID}")
+        
+        if ! echo "$response" | xmllint --xpath "//*[local-name()='Bucket']/*[local-name()='Name']/text()" - 2>/dev/null | grep -q "^${APP_BUCKET_NAME}$"; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Bucket '$APP_BUCKET_NAME' not found" >&2
+            exit 1
+        fi
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket verified"
+        
+        # Get DB2 pod
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Getting DB2 pod in namespace: $DB2_NAMESPACE"
+        DB2_POD=$(oc get pods -n "$DB2_NAMESPACE" "$DB2_POD_NAME" -o name)
+        
+        if [[ -z "$DB2_POD" ]]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 pod not found with name: $DB2_POD_NAME" >&2
+            exit 1
+        fi
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found DB2 pod: $DB2_POD"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing download inside DB2 pod..."
+        
+        # Execute download script inside DB2 pod
+        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- bash <<DOWNLOAD_SCRIPT
+        set -e
+        su - db2inst1
+        
+        # Export variables to DB2 pod environment
+        export ACCESS_TOKEN='$ACCESS_TOKEN'
+        export ENDPOINT='$ENDPOINT'
+        export APP_BUCKET_NAME='$APP_BUCKET_NAME'
+        export OBJECT_PREFIX='$OBJECT_PREFIX'
+        export DOWNLOAD_DIR='$DOWNLOAD_DIR'
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting download in DB2 pod"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket: \$APP_BUCKET_NAME"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download directory: \$DOWNLOAD_DIR"
+        
+        # List and download objects
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Listing objects in bucket: \$APP_BUCKET_NAME"
+        
+        marker=""
+        is_truncated="true"
+        total_count=0
+        
+        while [[ "\$is_truncated" == "true" ]]; do
+            # Build URL with optional prefix and marker
+            url="\$ENDPOINT/\$APP_BUCKET_NAME?max-keys=1000"
+            [[ -n "\$OBJECT_PREFIX" ]] && url="\${url}&prefix=\${OBJECT_PREFIX}"
+            [[ -n "\$marker" ]] && url="\${url}&marker=\${marker}"
+            
+            # Get object list
+            response=\$(curl -s "\$url" -H "Authorization: bearer \${ACCESS_TOKEN}")
+            
+            # Check if more pages exist
+            is_truncated=\$(echo "\$response" | xmllint --xpath '//*[local-name()="IsTruncated"]/text()' - 2>/dev/null || echo "false")
+            
+            # Get next marker if truncated
+            if [[ "\$is_truncated" == "true" ]]; then
+                marker=\$(echo "\$response" | xmllint --xpath '//*[local-name()="NextMarker"]/text()' - 2>/dev/null)
+            fi
+            
+            # Parse and download objects
+            object_count=\$(echo "\$response" | xmllint --xpath 'count(//*[local-name()="Contents"])' - 2>/dev/null)
+            
+            for ((i=1; i<=object_count; i++)); do
+                key=\$(echo "\$response" | xmllint --xpath "//*[local-name()='Contents'][\$i]/*[local-name()='Key']/text()" - 2>/dev/null)
+                size=\$(echo "\$response" | xmllint --xpath "//*[local-name()='Contents'][\$i]/*[local-name()='Size']/text()" - 2>/dev/null)
+                
+                # Download object
+                filename=\$(basename "\$key")
+                filepath="\$DOWNLOAD_DIR/\$filename"
+                
+                # Skip if already exists with same size
+                if [[ -f "\$filepath" ]]; then
+                    existing_size=\$(stat -c%s "\$filepath" 2>/dev/null)
+                    if [[ "\$existing_size" == "\$size" ]]; then
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Skipping (already exists): \$filename"
+                        ((total_count++))
+                        continue
+                    fi
+                fi
+                
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Downloading: \$filename (\$size bytes)"
+                
+                # Download with retry
+                attempt=0
+                max_attempts=3
+                success=false
+                
+                while (( attempt < max_attempts )) && [[ "\$success" != "true" ]]; do
+                    ((attempt++))
+                   if curl -s -f -o "\$filepath" "\$ENDPOINT/\$APP_BUCKET_NAME/\$key" -H "Authorization: bearer \${ACCESS_TOKEN}"; then
+                        
+                        # Verify size
+                        downloaded_size=\$(stat -c%s "\$filepath" 2>/dev/null)
+                        if [[ "\$downloaded_size" == "\$size" ]]; then
+                            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Downloaded: \$filename"
+                            success=true
+                        else
+                            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Size mismatch, retrying: \$filename (attempt \$attempt/\$max_attempts)"
+                            rm -f "\$filepath"
+                            sleep 2
+                        fi
+                    else
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download failed, retrying: \$filename (attempt \$attempt/\$max_attempts)"
+                        rm -f "\$filepath"
+                        sleep 2
+                    fi
+                done
+                
+                if [[ "\$success" != "true" ]]; then
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Failed to download after \$max_attempts attempts: \$filename"
+                else
+                    ((total_count++))
+                fi
+            done
+        done
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download complete. Total objects downloaded: \$total_count"
+        DOWNLOAD_SCRIPT
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] All done!"
+    - name: disable-facilities-app
+      runAfter: get-facilities-backup
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        export INSTANCE_ID=$(params.mas-instance-id)
+        export WORKSPACE_ID=$(params.mas-workspace-id)
+        export FACILITIES_NAMESPACE="mas-${INSTANCE_ID}-facilities"
+        
+        # Disable operators
+        oc scale deployment/ibm-mas-facilities-operator --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+        oc scale deployment/${INSTANCE_ID}-entitymgr-ws --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+
+        # Disable application
+        oc scale deployment/${INSTANCE_ID}-${WORKSPACE_ID}-multiagents --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+        oc scale statefulset/${INSTANCE_ID}-${WORKSPACE_ID}-appserver --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+    - name: restore-facilities-app
+      runAfter: disable-facilities-app
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        #!/usr/bin/env bash
+        set -e
+
+        APP="facilities"
+        DB2_NAMESPACE="$(params.db2-namespace)"
+        DB2_POD_NAME="c-mas-$(params.mas-instance-id)-$(params.mas-workspace-id)-$APP-db2u-0"
+        DOWNLOAD_DIR="$(params.download-dir)"
+        
+        # Get DB2 pod
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Getting DB2 pod in namespace: $DB2_NAMESPACE"
+        DB2_POD=$(oc get pods -n "$DB2_NAMESPACE" "$DB2_POD_NAME" -o name)
+        
+        if [[ -z "$DB2_POD" ]]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 pod not found with name: $DB2_POD_NAME" >&2
+            exit 1
+        fi
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found DB2 pod: $DB2_POD"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing restoration inside DB2 pod..."
+
+        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- bash <<RESTORE_SCRIPT
+        
+        set -e
+        su - db2inst1
+
+        export DOWNLOAD_DIR='$DOWNLOAD_DIR'
+
+        if [[ ! -d "\$DOWNLOAD_DIR" ]] || [[ -z "\$(ls -A \$DOWNLOAD_DIR)" ]]; then
+          echo "ERROR: Download directory empty or missing"
+          exit 1
+        fi
+
+        downloaded_files=\$(ls \$DOWNLOAD_DIR)
+        for file in \$downloaded_files; do
+          if [[ \$file =~ 'p12' || \$file =~ 'sth' ]]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Copying \$file to /mnt/blumeta0/db2/keystore"
+            cp \$DOWNLOAD_DIR/\$file /mnt/blumeta0/db2/keystore
+          else
+            export TIMESTAMP=\$(echo \$file | sed -E 's/.*\.([0-9]{14})\..*/\1/')
+            if [[ ! \$TIMESTAMP =~ ^[0-9]{14}$ ]]; then
+              echo "ERROR: Invalid timestamp format: \$TIMESTAMP"
+            exit 1
+            fi
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found backup timestamp: \$TIMESTAMP"
+          fi
+        done
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Updating keystore"
+        db2 update dbm cfg using KEYSTORE_LOCATION /mnt/blumeta0/db2/keystore/TRIDBkeystore.p12 2>/dev/null
+
+        # Check if restore already completed for this timestamp
+        RESTORE_MARKER="/mnt/backup/.restore_completed_\$TIMESTAMP"
+        if [[ -f "\$RESTORE_MARKER" ]]; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✓ Restore already completed for timestamp \$TIMESTAMP"
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying database is active..."
+          
+          # Ensure DB2 is running and database is active
+          db2start &>/dev/null || echo "DB2 already started"
+          db2 activate db BLUDB &>/dev/null || echo "BLUDB already active"
+          
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore verification complete - skipping restore"
+          exit 0
+        fi
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting new restore operation for timestamp \$TIMESTAMP"
+
+        # Track in-progress restore
+        RESTORE_IN_PROGRESS="/mnt/backup/.restore_in_progress_\$TIMESTAMP"
+        if [[ -f "\$RESTORE_IN_PROGRESS" ]]; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Previous restore was interrupted"
+          rm -f "\$RESTORE_IN_PROGRESS"
+        fi
+        touch "\$RESTORE_IN_PROGRESS"
+
+        # Check if database is in incomplete restore state (SQL1119N)
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Checking database state..."
+        db2 connect db BLUDB 2>/dev/null
+        DATABASE_STATE=\$(db2 connect to BLUDB)
+        
+        if echo "\$DATABASE_STATE" | grep -qE "SQL1119N"; then
+
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Database in incomplete restore state - cleaning up..."
+          
+          # Stop DB2 to clear incomplete restore state
+          db2stop force 2>/dev/null || true
+          
+          # Start DB2 in restricted mode to allow cleanup
+          db2start admin mode restricted access
+          
+          # Try to drop the database to clear the incomplete state
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dropping database to clear incomplete restore state"
+          db2 drop db BLUDB 2>/dev/null || echo "Database already dropped or doesn't exist"
+          
+          # Restart DB2 normally
+          db2stop force
+          db2start admin mode restricted access
+        else
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Database state is normal"
+          
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Disconnecting all applications"
+          db2 force application all
+  
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Terminate BLUDB database"
+          db2 terminate
+          
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Deactivate BLUDB database"
+          db2 deactivate database BLUDB
+          
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Stop DB2"
+          db2stop force
+          
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Start DB2 on restricted access"
+          db2start admin mode restricted access
+          
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Drop BLUDB database"
+          db2 drop db BLUDB
+        fi
+        
+        if [[ -z "\$TIMESTAMP" ]]; then
+          echo "ERROR: No backup timestamp found"
+          exit 1
+        fi
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore BLUDB at \$TIMESTAMP"
+        db2 RESTORE DATABASE BLUDB FROM /mnt/backup TAKEN AT \$TIMESTAMP ON /mnt/bludata0/db2/databases ENCRYPT WITHOUT ROLLING FORWARD WITHOUT PROMPTING
+        
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Force stopping DB2"
+        db2stop force
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting DB2"
+        db2start
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Activating database BLUDB"
+        db2 activate db BLUDB
+
+        # Mark restore as completed
+        rm -f "\$RESTORE_IN_PROGRESS"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Marking restore as completed"
+        touch "\$RESTORE_MARKER"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore marker created: \$RESTORE_MARKER"
+
+        RESTORE_SCRIPT
+    - name: enable-facilities-app 
+      image: quay.io/openshift/origin-cli:4.16
+      runAfter: restore-facilities-app
+      script: |
+        #!/usr/bin/env bash
+        set -e
+
+        export INSTANCE_ID=$(params.mas-instance-id)
+        export FACILITIES_NAMESPACE="mas-${INSTANCE_ID}-facilities"
+
+        oc scale deployment/ibm-mas-facilities-operator --replicas=1 --namespace $FACILITIES_NAMESPACE
+
+

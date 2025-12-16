@@ -6,8 +6,8 @@ metadata:
     github.com/project-slug: itz-public/deployer-tekton-tasks
   labels:
     techzone.ibm.com/version: "0.2"
-  description: this task gets MAS backup from Cloud Object Storage
-  title: Get MAS Backup
+  description: This task restores MREF from a COS instance
+  title: Restore Maximo Real Estate and Facilities
   namespace: ibm-technology-zone
 spec:
   type: tekton-task
