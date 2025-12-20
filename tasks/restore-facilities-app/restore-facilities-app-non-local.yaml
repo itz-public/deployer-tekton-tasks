@@ -1,0 +1,277 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: restore-facilities-app
+spec:
+  params:
+    - name: application
+      type: string
+      description: MAS Application
+      default: ""
+    - name: apikey
+      type: string
+      description: COS apikey
+      default: ""
+    - name: resource-id
+      type: string
+      description: IBM Cloud Object Storage resource instance ID (CRN)
+      default: ""
+    - name: endpoint
+      type: string
+      description: S3 endpoint URL
+      default: "https://s3.us.cloud-object-storage.appdomain.cloud"
+    - name: object-prefix
+      type: string
+      description: Optional prefix to filter objects
+      default: ""
+    - name: mas-instance-id
+      type: string
+      default: "mas1"
+    - name: mas-workspace-id
+      type: string
+      default: "gtmdemo"
+    - name: mas-workspace-name
+      type: string
+      default: "workspace"
+    - name: db2-namespace
+      type: string
+      description: Namespace where DB2 is deployed
+      default: "db2u"
+    - name: download-dir
+      type: string
+      description: Download directory inside DB2 pod
+      default: "/workspace/download-workspace"
+  steps:
+    - name: get-backup
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        #!/usr/bin/env bash
+        
+        ################################################################################
+        # IBM Cloud Object Storage Backup Download to DB2 Pod
+        ################################################################################
+        
+        set -e
+        
+        # Configuration from parameters
+        APP="$(params.application)"
+        if [[ $APP == "facilities" ]]; then
+          APP_BUCKET_NAME="techzone-mref"
+        else
+          APP_BUCKET_NAME="techzone"-$APP
+        fi
+        RESOURCE_ID="$(params.resource-id)"
+        ENDPOINT="$(params.endpoint)"
+        OBJECT_PREFIX="$(params.object-prefix)"
+        DOWNLOAD_DIR="$(params.download-dir)/$APP"
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] IBM Cloud Object Storage Backup Download to DB2 Pod"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting download process..."
+        
+        # Validate configuration
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Validating configuration..."
+        [[ -z "$APP" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Application name is not set" >&2; exit 1; }
+        [[ -z "$RESOURCE_ID" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: RESOURCE_ID is not set" >&2; exit 1; }
+        [[ -z "$ENDPOINT" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: ENDPOINT is not set" >&2; exit 1; }
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Configuration validated"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Application: $APP"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket: $APP_BUCKET_NAME"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download directory: $DOWNLOAD_DIR"
+        
+        # Authenticate to IBM Cloud
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Authenticating to IBM Cloud..."
+        
+        IBMCLOUD_API_KEY="$(params.apikey)"
+        [[ -z "$IBMCLOUD_API_KEY" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to retrieve IBM Cloud API key from secret" >&2; exit 1; }
+        
+        auth_response=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "apikey=${IBMCLOUD_API_KEY}" \
+            --data-urlencode "response_type=cloud_iam" \
+            --data-urlencode "grant_type=urn:ibm:params:oauth:grant-type:apikey")
+        
+        ACCESS_TOKEN=$(echo "$auth_response" | grep -o '"access_token":"[^"]*' | grep -o '[^"]*$')
+        [[ -z "$ACCESS_TOKEN" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to get access token" >&2; exit 1; }
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Authentication successful"
+        
+        # Verify bucket exists
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying bucket: $APP_BUCKET_NAME"
+        
+        response=$(curl -s "$ENDPOINT/" \
+            -H "Authorization: bearer ${ACCESS_TOKEN}" \
+            -H "ibm-service-instance-id: ${RESOURCE_ID}")
+        
+        if ! echo "$response" | xmllint --xpath "//*[local-name()='Bucket']/*[local-name()='Name']/text()" - 2>/dev/null | grep -q "^${APP_BUCKET_NAME}$"; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Bucket '$APP_BUCKET_NAME' not found" >&2
+            exit 1
+        fi
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket verified"
+        
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Creating $DOWNLOAD_DIR"
+        mkdir -p $DOWNLOAD_DIR
+        
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket: $APP_BUCKET_NAME"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download directory: $DOWNLOAD_DIR"
+        
+        # List and download objects
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Listing objects in bucket: $APP_BUCKET_NAME"
+        
+        marker=""
+        is_truncated="true"
+        total_count=0
+        
+        while [[ "$is_truncated" == "true" ]]; do
+            # Build URL with optional prefix and marker
+            url="$ENDPOINT/$APP_BUCKET_NAME?max-keys=1000"
+            [[ -n "$OBJECT_PREFIX" ]] && url="${url}&prefix=${OBJECT_PREFIX}"
+            [[ -n "$marker" ]] && url="${url}&marker=${marker}"
+            
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Fetching object list from: $url"
+            
+            # Get object list
+            response=$(curl -s "$url" \
+                -H "Authorization: bearer ${ACCESS_TOKEN}" \
+                -H "ibm-service-instance-id: ${RESOURCE_ID}")
+            
+            # Debug: Check if we got a response
+            if [[ -z "$response" ]]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Empty response from API" >&2
+                exit 1
+            fi
+            
+            # Check if more pages exist
+            is_truncated=$(echo "$response" | xmllint --xpath '//*[local-name()="IsTruncated"]/text()' - 2>/dev/null || echo "false")
+            
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Is truncated: $is_truncated"
+            
+            # Get next marker if truncated
+            if [[ "$is_truncated" == "true" ]]; then
+                marker=$(echo "$response" | xmllint --xpath '//*[local-name()="NextMarker"]/text()' - 2>/dev/null)
+            fi
+            
+            # Parse and download objects
+            object_count=$(echo "$response" | xmllint --xpath 'count(//*[local-name()="Contents"])' - 2>/dev/null)
+            
+            for ((i=1; i<=object_count; i++)); do
+                key=$(echo "$response" | xmllint --xpath "//*[local-name()='Contents'][$i]/*[local-name()='Key']/text()" - 2>/dev/null)
+                size=$(echo "$response" | xmllint --xpath "//*[local-name()='Contents'][$i]/*[local-name()='Size']/text()" - 2>/dev/null)
+                
+                # Download object
+                filename=$(basename "$key")
+                filepath="$DOWNLOAD_DIR/$filename"
+                
+                # Skip if already exists with same size
+                if [[ -f "$filepath" ]]; then
+                    existing_size=$(stat -f%z "$filepath" 2>/dev/null || stat -c%s "$filepath" 2>/dev/null)
+                    if [[ "$existing_size" == "$size" ]]; then
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Skipping (already exists): $filename"
+                        ((total_count++))
+                        continue
+                    fi
+                fi
+                
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Downloading: $filename ($size bytes)"
+                
+                # Download with retry
+                attempt=0
+                max_attempts=3
+                success=false
+                
+                while [ "$attempt" -lt "$max_attempts" ] && [ "$success" != "true" ]; do
+                    attempt=$((attempt + 1))
+                   if curl -s -f -o "$filepath" "$ENDPOINT/$APP_BUCKET_NAME/$key" -H "Authorization: bearer ${ACCESS_TOKEN}" ; then
+                      # Verify size
+                      downloaded_size=$(stat -f%z "$filepath" 2>/dev/null || stat -c%s "$filepath" 2>/dev/null)
+                      if [[ "$downloaded_size" == "$size" ]]; then
+                          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Downloaded: $filename ($downloaded_size bytes)"
+                          success=true
+                      else
+                          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Size mismatch, retrying: $filename (attempt $attempt/$max_attempts)"
+                          rm -f "$filepath"
+                          sleep 2
+                      fi
+                    else
+                      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download failed, retrying: $filename (attempt $attempt/$max_attempts)"
+                      rm -f "$filepath"
+                      sleep 2
+                    fi
+                done
+                
+                if [[ "$success" != "true" ]]; then
+                  echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Failed to download after $max_attempts attempts: $filename"
+                else
+                  total_count=$((total_count + 1))
+                fi
+            done
+        done
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download complete. Total objects downloaded: $total_count"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] All done!"
+    - name: disable-app
+      runAfter: get-backup
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        export INSTANCE_ID=$(params.mas-instance-id)
+        export WORKSPACE_ID=$(params.mas-workspace-id)
+        export FACILITIES_NAMESPACE="mas-${INSTANCE_ID}-facilities"
+        
+        # Disable operators
+        oc scale deployment/ibm-mas-facilities-operator --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+        oc scale deployment/${INSTANCE_ID}-entitymgr-ws --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+
+        # Disable application
+        oc scale deployment/${INSTANCE_ID}-${WORKSPACE_ID}-multiagents --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+        oc scale statefulset/${INSTANCE_ID}-${WORKSPACE_ID}-appserver --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
+    - name: restore-app
+      runAfter: disable-facilities-app
+      image: quay.io/openshift/origin-cli:4.16
+      script: |
+        #!/usr/bin/env bash
+
+        downloaded_files=$(ls $(workspaces.download-workspace.path)/$APP)
+        for file in $downloaded_files; do
+          if [[ ! $file =~ 'p12' || ! $file !=~ 'sth' ]]; then
+            
+            if [[ ! $TIMESTAMP =~ ^[0-9]{14}$ ]]; then
+              echo "ERROR: Invalid timestamp format: $TIMESTAMP"
+            exit 1
+            fi
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found backup timestamp: $TIMESTAMP"
+          fi
+        done
+
+        export APP="$(params.application)"
+        export MASBR_ACTION="restore"
+        export MASBR_STORAGE_LOCAL_FOLDER="$(workspaces.download-workspace.path)/$APP"
+        export MAS_INSTANCE_ID="$(params.mas-instance-id)"
+        export MAS_WORKSPACE_ID="$(params.mas-workspace-id)"
+        export DB2_INSTANCE_NAME="mas-$MAS_INSTANCE_ID-$MAS_WORKSPACE_ID-$APP"
+        export DB2_NAMESPACE="db2u"
+        export MASBR_RESTORE_FROM_VERSION="$TIMESTAMP"
+        export MASBR_RESTORE_OVERWRITE="true"
+
+        ansible-playbook ibm.mas_devops.br_db2
+    - name: enable-facilities-app 
+      image: quay.io/openshift/origin-cli:4.16
+      runAfter: restore-facilities-app
+      script: |
+        #!/usr/bin/env bash
+        set -e
+
+        export INSTANCE_ID=$(params.mas-instance-id)
+        export FACILITIES_NAMESPACE="mas-${INSTANCE_ID}-facilities"
+
+        oc scale deployment/ibm-mas-facilities-operator --replicas=1 --namespace $FACILITIES_NAMESPACE
+  workspaces:
+  - description: >-
+      The workspace which contains the download files
+    name: download-workspace
+    optional: false

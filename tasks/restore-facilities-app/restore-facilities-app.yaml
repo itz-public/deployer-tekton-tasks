@@ -263,124 +263,22 @@ spec:
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing restoration inside DB2 pod..."
 
         oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- bash <<RESTORE_SCRIPT
+
+        for file in \$DOWNLOAD_DIR; do
+          if [[ ! \$file =~ 'p12' || ! \$file !=~ 'sth' ]]; then
+            export TIMESTAMP=\$(echo \$file | sed -E 's/.*\.([0-9]{14})\..*/\1/')
+            if [[ ! $TIMESTAMP =~ ^[0-9]{14}$ ]]; then
+              echo "ERROR: Invalid timestamp format: $TIMESTAMP"
+            exit 1
+            fi
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found backup timestamp: $TIMESTAMP"
+          fi
+        done
         
         set -e
         su - db2inst1
 
-        export DOWNLOAD_DIR='$DOWNLOAD_DIR'
-
-        if [[ ! -d "\$DOWNLOAD_DIR" ]] || [[ -z "\$(ls -A \$DOWNLOAD_DIR)" ]]; then
-          echo "ERROR: Download directory empty or missing"
-          exit 1
-        fi
-
-        downloaded_files=\$(ls \$DOWNLOAD_DIR)
-        for file in \$downloaded_files; do
-          if [[ \$file =~ 'p12' || \$file =~ 'sth' ]]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Copying \$file to /mnt/blumeta0/db2/keystore"
-            cp \$DOWNLOAD_DIR/\$file /mnt/blumeta0/db2/keystore
-          else
-            export TIMESTAMP=\$(echo \$file | sed -E 's/.*\.([0-9]{14})\..*/\1/')
-            if [[ ! \$TIMESTAMP =~ ^[0-9]{14}$ ]]; then
-              echo "ERROR: Invalid timestamp format: \$TIMESTAMP"
-            exit 1
-            fi
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found backup timestamp: \$TIMESTAMP"
-          fi
-        done
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Updating keystore"
-        db2 update dbm cfg using KEYSTORE_LOCATION /mnt/blumeta0/db2/keystore/TRIDBkeystore.p12 2>/dev/null
-
-        # Check if restore already completed for this timestamp
-        RESTORE_MARKER="/mnt/backup/.restore_completed_\$TIMESTAMP"
-        if [[ -f "\$RESTORE_MARKER" ]]; then
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✓ Restore already completed for timestamp \$TIMESTAMP"
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying database is active..."
-          
-          # Ensure DB2 is running and database is active
-          db2start &>/dev/null || echo "DB2 already started"
-          db2 activate db BLUDB &>/dev/null || echo "BLUDB already active"
-          
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore verification complete - skipping restore"
-          exit 0
-        fi
-
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting new restore operation for timestamp \$TIMESTAMP"
-
-        # Track in-progress restore
-        RESTORE_IN_PROGRESS="/mnt/backup/.restore_in_progress_\$TIMESTAMP"
-        if [[ -f "\$RESTORE_IN_PROGRESS" ]]; then
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Previous restore was interrupted"
-          rm -f "\$RESTORE_IN_PROGRESS"
-        fi
-        touch "\$RESTORE_IN_PROGRESS"
-
-        # Check if database is in incomplete restore state (SQL1119N)
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Checking database state..."
-        db2 connect db BLUDB 2>/dev/null
-        DATABASE_STATE=\$(db2 connect to BLUDB)
-        
-        if echo "\$DATABASE_STATE" | grep -qE "SQL1119N"; then
-
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Database in incomplete restore state - cleaning up..."
-          
-          # Stop DB2 to clear incomplete restore state
-          db2stop force 2>/dev/null || true
-          
-          # Start DB2 in restricted mode to allow cleanup
-          db2start admin mode restricted access
-          
-          # Try to drop the database to clear the incomplete state
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Dropping database to clear incomplete restore state"
-          db2 drop db BLUDB 2>/dev/null || echo "Database already dropped or doesn't exist"
-          
-          # Restart DB2 normally
-          db2stop force
-          db2start admin mode restricted access
-        else
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Database state is normal"
-          
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Disconnecting all applications"
-          db2 force application all
-  
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Terminate BLUDB database"
-          db2 terminate
-          
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Deactivate BLUDB database"
-          db2 deactivate database BLUDB
-          
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Stop DB2"
-          db2stop force
-          
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Start DB2 on restricted access"
-          db2start admin mode restricted access
-          
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Drop BLUDB database"
-          db2 drop db BLUDB
-        fi
-        
-        if [[ -z "\$TIMESTAMP" ]]; then
-          echo "ERROR: No backup timestamp found"
-          exit 1
-        fi
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore BLUDB at \$TIMESTAMP"
-        db2 RESTORE DATABASE BLUDB FROM /mnt/backup TAKEN AT \$TIMESTAMP ON /mnt/bludata0/db2/databases ENCRYPT WITHOUT ROLLING FORWARD WITHOUT PROMPTING
-        
-        
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Force stopping DB2"
-        db2stop force
-        
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting DB2"
-        db2start
-        
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Activating database BLUDB"
-        db2 activate db BLUDB
-
-        # Mark restore as completed
-        rm -f "\$RESTORE_IN_PROGRESS"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Marking restore as completed"
-        touch "\$RESTORE_MARKER"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore marker created: \$RESTORE_MARKER"
+        db2
 
         RESTORE_SCRIPT
     - name: enable-facilities-app 
@@ -390,9 +288,65 @@ spec:
         #!/usr/bin/env bash
         set -e
 
-        export INSTANCE_ID=$(params.mas-instance-id)
-        export FACILITIES_NAMESPACE="mas-${INSTANCE_ID}-facilities"
+        APP="facilities"
+        DB2_NAMESPACE="$(params.db2-namespace)"
+        DB2_POD_NAME="c-mas-$(params.mas-instance-id)-$(params.mas-workspace-id)-$APP-db2u-0"
+        DOWNLOAD_DIR="$(params.download-dir)"
 
-        oc scale deployment/ibm-mas-facilities-operator --replicas=1 --namespace $FACILITIES_NAMESPACE
+        # Get DB2 pod
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Getting DB2 pod in namespace: $DB2_NAMESPACE"
+        DB2_POD=$(oc get pods -n "$DB2_NAMESPACE" "$DB2_POD_NAME" -o name)
 
+        if [[ -z "$DB2_POD" ]]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 pod not found with name: $DB2_POD_NAME" >&2
+            exit 1
+        fi
 
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found DB2 pod: $DB2_POD"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing restoration inside DB2 pod..."
+
+        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- su - db2inst1 && cat << "EOF" > restore.sh
+
+        set -e
+        su - db2inst1
+
+        export DOWNLOAD_DIR=$(echo '$DOWNLOAD_DIR')
+
+        for file in $(ls $DOWNLOAD_DIR); do
+          if [[ ! $file =~ 'p12' && ! $file =~ 'sth' ]]; then
+            export TIMESTAMP=$(echo $file | sed -E 's/.*\.([0-9]{14})\..*/\1/')
+            if [[ ! $TIMESTAMP =~ ^[0-9]{14}$ ]]; then
+              echo "ERROR: Invalid timestamp format: $TIMESTAMP"
+              exit 1
+            fi
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found backup timestamp: $TIMESTAMP"
+          else
+            cp $DOWNLOAD_DIR/$file /mnt/blumeta0/db2/keystore/
+          fi
+        done
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up keystore location"
+        db2 update dbm cfg using KEYSTORE_LOCATION /mnt/blumeta0/db2/keystore/$(ls $DOWNLOAD_DIR | grep -i ".p12")
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying restore image"
+        cd $DOWNLOAD_DIR
+        db2ckbkp $(ls $DOWNLOAD_DIR | grep -i "BLUDB")
+        rc=$?
+        if [[ $rc == "0" ]]; then
+          db2 connect to bludb
+          db2 force application all
+          db2 terminate
+          db2 deactivate database bludb
+          db2stop force
+          db2start admin mode restricted access
+          db2 drop db bludb
+          db2 RESTORE DATABASE BLUDB FROM $DOWNLOAD_DIR TAKEN AT $TIMESTAMP ON /mnt/bludata0/db2/databases ENCRYPT WITHOUT ROLLING FORWARD WITHOUT PROMPTING
+          db2stop force
+          db2start
+          db2 activate db bludb
+        else
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Db2 check failed"
+          exit 1
+        fi
+
+        EOF
