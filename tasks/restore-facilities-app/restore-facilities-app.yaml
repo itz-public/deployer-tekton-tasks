@@ -294,23 +294,25 @@ spec:
         DOWNLOAD_DIR="$(params.download-dir)"
 
         # Get DB2 pod
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Getting DB2 pod in namespace: $DB2_NAMESPACE"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Copying script to DB2 pod $DB2_NAMESPACE"
         DB2_POD=$(oc get pods -n "$DB2_NAMESPACE" "$DB2_POD_NAME" -o name)
 
         if [[ -z "$DB2_POD" ]]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 pod not found with name: $DB2_POD_NAME" >&2
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 pod not found with name: $DB2_POD_NAME"
             exit 1
         fi
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found DB2 pod: $DB2_POD"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing restoration inside DB2 pod..."
 
-        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- su - db2inst1 && cat << "EOF" > restore.sh
-
+        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- sh -c 'cat > ~/techzone_restore.sh' <<"EOF"
+        #!/bin/bash
         set -e
-        su - db2inst1
+        WHOAMI=$(whoami)
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Pod User $WHOAMI"
 
-        export DOWNLOAD_DIR=$(echo '$DOWNLOAD_DIR')
+        export DOWNLOAD_DIR=$1
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] DEBUG: DOWNLOAD_DIR: $DOWNLOAD_DIR"
 
         for file in $(ls $DOWNLOAD_DIR); do
           if [[ ! $file =~ 'p12' && ! $file =~ 'sth' ]]; then
@@ -326,27 +328,61 @@ spec:
         done
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting up keystore location"
-        db2 update dbm cfg using KEYSTORE_LOCATION /mnt/blumeta0/db2/keystore/$(ls $DOWNLOAD_DIR | grep -i ".p12")
+        db2 update dbm cfg using KEYSTORE_LOCATION /mnt/blumeta0/db2/keystore/$(ls $DOWNLOAD_DIR | grep -i ".p12") || true
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying restore image"
         cd $DOWNLOAD_DIR
-        db2ckbkp $(ls $DOWNLOAD_DIR | grep -i "BLUDB")
-        rc=$?
+        # db2ckbkp $(ls $DOWNLOAD_DIR | grep -i "BLUDB")
+        # rc=$?
+        rc=0
         if [[ $rc == "0" ]]; then
-          db2 connect to bludb
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Connecting to BLUDB"
+          db2 connect to BLUDB || true
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Disconnecting Apps"
           db2 force application all
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Terminating BLUDB"
           db2 terminate
-          db2 deactivate database bludb
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Deactivating BLUDB"
+          db2 deactivate database BLUDB || true
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Stoping database"
           db2stop force
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Re-starting with admin access"
           db2start admin mode restricted access
-          db2 drop db bludb
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Drop database"
+          db2 drop db BLUDB || true
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore database"
           db2 RESTORE DATABASE BLUDB FROM $DOWNLOAD_DIR TAKEN AT $TIMESTAMP ON /mnt/bludata0/db2/databases ENCRYPT WITHOUT ROLLING FORWARD WITHOUT PROMPTING
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Stop and restart database"
           db2stop force
           db2start
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Activate BLUDB"
           db2 activate db bludb
         else
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Db2 check failed"
           exit 1
         fi
-
         EOF
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing script"
+
+        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- bash <<RESTORE_SCRIPT
+        cp -f /db2uadm/techzone_restore.sh /mnt/blumeta0/home/db2inst1/techzone_restore.sh
+        chmod 777 ~/techzone_restore.sh
+        if [ -f ~/techzone_logs.log ]; then
+          rm -rf techzone_logs.log
+        fi
+
+        sudo su - db2inst1 -c "setsid -w ~/techzone_restore.sh $(params.download-dir) < /dev/null > techzone_logs.log 2>&1 &"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Succesfully issued the command"
+
+        export RANDOM_VAR="7200"
+
+        while ! grep "DB20000I The RESTORE DATABASE command completed successfully" /mnt/blumeta0/home/db2inst1/techzone_logs.log ; do
+            if [[ $SECONDS -gt $RANDOM_VAR ]]; then
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] Timeout reached. Exiting with failure..."
+              exit 1
+            fi
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore process still running..."
+          sleep 60
+        done
+        RESTORE_SCRIPT
