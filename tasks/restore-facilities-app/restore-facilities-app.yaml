@@ -4,51 +4,52 @@ metadata:
   name: restore-facilities-app
 spec:
   params:
-    - name: apikey
-      type: string
+    - default: ''
       description: COS apikey
-      default: ""
-    - name: resource-id
+      name: apikey
       type: string
+    - default: ''
       description: IBM Cloud Object Storage resource instance ID (CRN)
-      default: ""
-    - name: endpoint
+      name: resource-id
       type: string
+    - default: 'https://s3.us.cloud-object-storage.appdomain.cloud'
       description: S3 endpoint URL
-      default: "https://s3.us.cloud-object-storage.appdomain.cloud"
-    - name: object-prefix
+      name: endpoint
       type: string
+    - default: ''
       description: Optional prefix to filter objects
-      default: ""
-    - name: mas-instance-id
+      name: object-prefix
       type: string
-      default: "mas1"
-    - name: mas-workspace-id
+    - default: mas1
+      name: mas-instance-id
       type: string
-      default: "ws1"
-    - name: mas-workspace-name
+    - default: ws1
+      name: mas-workspace-id
       type: string
-      default: "workspace"
-    - name: db2-namespace
+    - default: workspace
+      name: mas-workspace-name
       type: string
+    - default: db2u
       description: Namespace where DB2 is deployed
-      default: "db2u"
-    - name: download-dir
+      name: db2-namespace
       type: string
+    - default: /mnt/backup
       description: Download directory inside DB2 pod
-      default: "/mnt/backup"
+      name: download-dir
+      type: string
   steps:
-    - name: get-facilities-backup
-      image: quay.io/openshift/origin-cli:4.16
+    - computeResources: {}
+      image: 'quay.io/openshift/origin-cli:4.16'
+      name: get-facilities-backup
       script: |
         #!/usr/bin/env bash
-        
+
         ################################################################################
         # IBM Cloud Object Storage Backup Download to DB2 Pod
         ################################################################################
-        
+
         set -e
-        
+
         # Configuration from parameters
         APP="facilities"
         APP_BUCKET_NAME="techzone-mref"
@@ -58,90 +59,90 @@ spec:
         DB2_NAMESPACE="$(params.db2-namespace)"
         DB2_POD_NAME="c-mas-$(params.mas-instance-id)-$(params.mas-workspace-id)-$APP-db2u-0"
         DOWNLOAD_DIR="$(params.download-dir)"
-        
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] IBM Cloud Object Storage Backup Download to DB2 Pod"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting download process..."
-        
+
         # Validate configuration
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Validating configuration..."
         [[ -z "$APP" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Application name is not set" >&2; exit 1; }
         [[ -z "$RESOURCE_ID" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: RESOURCE_ID is not set" >&2; exit 1; }
         [[ -z "$ENDPOINT" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: ENDPOINT is not set" >&2; exit 1; }
         [[ -z "$DB2_NAMESPACE" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 namespace is not set" >&2; exit 1; }
-        
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Configuration validated"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Application: $APP"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket: $APP_BUCKET_NAME"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] DB2 Namespace: $DB2_NAMESPACE"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download directory: $DOWNLOAD_DIR"
-        
+
         # Authenticate to IBM Cloud
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Authenticating to IBM Cloud..."
-        
+
         IBMCLOUD_API_KEY="$(params.apikey)"
         [[ -z "$IBMCLOUD_API_KEY" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to retrieve IBM Cloud API key from secret" >&2; exit 1; }
-        
+
         auth_response=$(curl -s -X POST "https://iam.cloud.ibm.com/identity/token" \
             -H 'Accept: application/json' \
             -H 'Content-Type: application/x-www-form-urlencoded' \
             --data-urlencode "apikey=${IBMCLOUD_API_KEY}" \
             --data-urlencode "response_type=cloud_iam" \
             --data-urlencode "grant_type=urn:ibm:params:oauth:grant-type:apikey")
-        
+
         ACCESS_TOKEN=$(echo "$auth_response" | grep -o '"access_token":"[^"]*' | grep -o '[^"]*$')
         [[ -z "$ACCESS_TOKEN" ]] && { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to get access token" >&2; exit 1; }
-        
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Authentication successful"
-        
+
         # Verify bucket exists
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Verifying bucket: $APP_BUCKET_NAME"
-        
+
         response=$(curl -s "$ENDPOINT/" \
             -H "Authorization: bearer ${ACCESS_TOKEN}" \
             -H "ibm-service-instance-id: ${RESOURCE_ID}")
-        
+
         if ! echo "$response" | xmllint --xpath "//*[local-name()='Bucket']/*[local-name()='Name']/text()" - 2>/dev/null | grep -q "^${APP_BUCKET_NAME}$"; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Bucket '$APP_BUCKET_NAME' not found" >&2
             exit 1
         fi
-        
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket verified"
-        
+
         # Get DB2 pod
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Getting DB2 pod in namespace: $DB2_NAMESPACE"
         DB2_POD=$(oc get pods -n "$DB2_NAMESPACE" "$DB2_POD_NAME" -o name)
-        
+
         if [[ -z "$DB2_POD" ]]; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 pod not found with name: $DB2_POD_NAME" >&2
             exit 1
         fi
-        
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found DB2 pod: $DB2_POD"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing download inside DB2 pod..."
-        
+
         # Execute download script inside DB2 pod
         oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- bash <<DOWNLOAD_SCRIPT
         set -e
         su - db2inst1
-        
+
         # Export variables to DB2 pod environment
         export ACCESS_TOKEN='$ACCESS_TOKEN'
         export ENDPOINT='$ENDPOINT'
         export APP_BUCKET_NAME='$APP_BUCKET_NAME'
         export OBJECT_PREFIX='$OBJECT_PREFIX'
         export DOWNLOAD_DIR='$DOWNLOAD_DIR'
-        
+
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting download in DB2 pod"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bucket: \$APP_BUCKET_NAME"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Download directory: \$DOWNLOAD_DIR"
-        
+
         # List and download objects
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Listing objects in bucket: \$APP_BUCKET_NAME"
-        
+
         marker=""
         is_truncated="true"
         total_count=0
-        
+
         while [[ "\$is_truncated" == "true" ]]; do
             # Build URL with optional prefix and marker
             url="\$ENDPOINT/\$APP_BUCKET_NAME?max-keys=1000"
@@ -187,8 +188,9 @@ spec:
                 max_attempts=3
                 success=false
                 
-                while (( attempt < max_attempts )) && [[ "\$success" != "true" ]]; do
+                 while (( attempt < max_attempts )) && [[ "\$success" != "true" ]]; do
                     ((attempt++))
+                  echo \$filepath
                    if curl -s -f -o "\$filepath" "\$ENDPOINT/\$APP_BUCKET_NAME/\$key" -H "Authorization: bearer \${ACCESS_TOKEN}"; then
                         
                         # Verify size
@@ -220,70 +222,9 @@ spec:
         DOWNLOAD_SCRIPT
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] All done!"
-    - name: disable-facilities-app
-      runAfter: get-facilities-backup
-      image: quay.io/openshift/origin-cli:4.16
-      script: |
-        #!/usr/bin/env bash
-        set -e
-        
-        export INSTANCE_ID=$(params.mas-instance-id)
-        export WORKSPACE_ID=$(params.mas-workspace-id)
-        export FACILITIES_NAMESPACE="mas-${INSTANCE_ID}-facilities"
-        
-        # Disable operators
-        oc scale deployment/ibm-mas-facilities-operator --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
-        oc scale deployment/${INSTANCE_ID}-entitymgr-ws --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
-
-        # Disable application
-        oc scale deployment/${INSTANCE_ID}-${WORKSPACE_ID}-multiagents --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
-        oc scale statefulset/${INSTANCE_ID}-${WORKSPACE_ID}-appserver --replicas=0 --namespace $FACILITIES_NAMESPACE 2> /dev/null
-    - name: restore-facilities-app
-      runAfter: disable-facilities-app
-      image: quay.io/openshift/origin-cli:4.16
-      script: |
-        #!/usr/bin/env bash
-        set -e
-
-        APP="facilities"
-        DB2_NAMESPACE="$(params.db2-namespace)"
-        DB2_POD_NAME="c-mas-$(params.mas-instance-id)-$(params.mas-workspace-id)-$APP-db2u-0"
-        DOWNLOAD_DIR="$(params.download-dir)"
-        
-        # Get DB2 pod
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Getting DB2 pod in namespace: $DB2_NAMESPACE"
-        DB2_POD=$(oc get pods -n "$DB2_NAMESPACE" "$DB2_POD_NAME" -o name)
-        
-        if [[ -z "$DB2_POD" ]]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DB2 pod not found with name: $DB2_POD_NAME" >&2
-            exit 1
-        fi
-        
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found DB2 pod: $DB2_POD"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing restoration inside DB2 pod..."
-
-        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- bash <<RESTORE_SCRIPT
-
-        for file in \$DOWNLOAD_DIR; do
-          if [[ ! \$file =~ 'p12' || ! \$file !=~ 'sth' ]]; then
-            export TIMESTAMP=\$(echo \$file | sed -E 's/.*\.([0-9]{14})\..*/\1/')
-            if [[ ! $TIMESTAMP =~ ^[0-9]{14}$ ]]; then
-              echo "ERROR: Invalid timestamp format: $TIMESTAMP"
-            exit 1
-            fi
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found backup timestamp: $TIMESTAMP"
-          fi
-        done
-        
-        set -e
-        su - db2inst1
-
-        db2
-
-        RESTORE_SCRIPT
-    - name: enable-facilities-app 
-      image: quay.io/openshift/origin-cli:4.16
-      runAfter: restore-facilities-app
+    - computeResources: {}
+      image: 'quay.io/openshift/origin-cli:4.16'
+      name: restore-facilities-app
       script: |
         #!/usr/bin/env bash
         set -e
@@ -305,10 +246,14 @@ spec:
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Found DB2 pod: $DB2_POD"
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing restoration inside DB2 pod..."
 
-        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- sh -c 'cat > ~/techzone_restore.sh' <<"EOF"
+        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- su - db2inst1 -c 'cat > ~/techzone_restore.sh' <<"EOF"
         #!/bin/bash
         set -e
         WHOAMI=$(whoami)
+        echo $INST_DIR
+        source $HOME/sqllib/db2profile
+
+        exit 0
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Pod User $WHOAMI"
 
         export DOWNLOAD_DIR=$1
@@ -339,13 +284,13 @@ spec:
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Connecting to BLUDB"
           db2 connect to BLUDB || true
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Disconnecting Apps"
-          db2 force application all
+          db2 force application all || true
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Terminating BLUDB"
           db2 terminate
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Deactivating BLUDB"
           db2 deactivate database BLUDB || true
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Stoping database"
-          db2stop force
+          db2stop force || true
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Re-starting with admin access"
           db2start admin mode restricted access
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] Drop database"
@@ -363,26 +308,13 @@ spec:
         fi
         EOF
 
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing script"
-
-        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- bash <<RESTORE_SCRIPT
-        cp -f /db2uadm/techzone_restore.sh /mnt/blumeta0/home/db2inst1/techzone_restore.sh
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Giving permissions..."
+        oc exec -i "$DB2_POD" -n "$DB2_NAMESPACE" -- su - db2inst1 <<PERMISSION_SET
         chmod 777 ~/techzone_restore.sh
         if [ -f ~/techzone_logs.log ]; then
           rm -rf techzone_logs.log
         fi
+        PERMISSION_SET
 
-        sudo su - db2inst1 -c "setsid -w ~/techzone_restore.sh $(params.download-dir) < /dev/null > techzone_logs.log 2>&1 &"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Succesfully issued the command"
-
-        export RANDOM_VAR="7200"
-
-        while ! grep "DB20000I The RESTORE DATABASE command completed successfully" /mnt/blumeta0/home/db2inst1/techzone_logs.log ; do
-            if [[ $SECONDS -gt $RANDOM_VAR ]]; then
-              echo "[$(date '+%Y-%m-%d %H:%M:%S')] Timeout reached. Exiting with failure..."
-              exit 1
-            fi
-          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restore process still running..."
-          sleep 60
-        done
-        RESTORE_SCRIPT
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing script"
+        oc rsh -n "$DB2_NAMESPACE" -c db2u "$DB2_POD" su - db2inst1 -c "nohup ~/techzone_restore.sh $DOWNLOAD_DIR < /dev/null > techzone_logs.log 2>&1 &"
