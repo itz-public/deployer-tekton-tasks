@@ -233,6 +233,9 @@ spec:
     - name: rsl-token
       type: string
       default: ""
+    - name: skip-grafana-install
+      type: string
+      default: "false"
 
   steps:
     - name: install-mas
@@ -374,6 +377,11 @@ spec:
         CMD+=" --db2-meta-storage $(params.db2-meta-storage)"
         CMD+=" --db2-temp-storage $(params.db2-temp-storage)"
 
+        SKIP_GRAFANA="$(params.skip-grafana-install)"
+        if [[ "$SKIP_GRAFANA" == "true" ]]; then
+          CMD+=" --skip-grafana-install"
+        fi
+
         # Manual Certs
         USE_MANUAL_CERTS=$(params.use-letsencrypt-certs)
         if [[ "$USE_MANUAL_CERTS" == "true" ]]; then
@@ -433,6 +441,11 @@ spec:
           CMD+=" --tenant-entitlement-type $(params.tenant-entitlement-type)"
           CMD+=" --tenant-entitlement-start-date $(params.tenant-entitlement-start-date)"
           CMD+=" --tenant-entitlement-end-date $(params.tenant-entitlement-end-date)"
+
+          SKIP_GRAFANA="$(params.skip-grafana-install)"
+          if [[ "$SKIP_GRAFANA" == "true" ]]; then
+            CMD+=" --skip-grafana-install"
+          fi
 
           USE_MANUAL_CERTS=$(params.use-letsencrypt-certs)
           if [[ "$USE_MANUAL_CERTS" == "true" ]]; then
