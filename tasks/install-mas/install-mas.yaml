@@ -235,7 +235,7 @@ spec:
       default: ""
     - name: skip-grafana-install
       type: string
-      default: "false"
+      default: "true"
 
   steps:
     - name: install-mas
