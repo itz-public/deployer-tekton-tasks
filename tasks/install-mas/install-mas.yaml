@@ -236,6 +236,9 @@ spec:
     - name: skip-grafana-install
       type: string
       default: "true"
+    - name: admin-mode
+      type: string
+      default: cluster
 
   steps:
     - name: install-mas
@@ -264,6 +267,7 @@ spec:
         CMD+=" --storage-accessmode \"$(params.storage-accessmode)\""
         CMD+=" --dro-namespace $(params.dro-namespace)"
         CMD+=" --mongodb-namespace $(params.mongodb-namespace)"
+        CMD+=" --admin-mode $(params.admin-mode)"
 
         MAS_APP_CFG_RETRIES="$(params.mas-app-cfg-retries)"
         if [[ "$MAS_APP_CFG_RETRIES" != "" ]]; then
